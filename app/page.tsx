@@ -49,7 +49,7 @@ export default function Home() {
   const blobTwist = useTransform(scrollY, [0, 2000], [0, 240]);
 
   // Smooth cinematic easing curve
-  const elegantEase = [0.22, 1, 0.36, 1];
+  const elegantEase = [0.22, 1, 0.36, 1] as const;
 
   const toggleMute = () => {
     if (videoRef.current) {
