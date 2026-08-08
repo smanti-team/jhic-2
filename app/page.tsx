@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, useScroll, useTransform } from "framer-motion";
 import {
   Volume2,
@@ -39,10 +39,259 @@ const springConfig = {
 
 // Proportional Durations according to MD3 Motion Guidelines
 const DURATION = {
-  SMALL: 0.22,  
-  MEDIUM: 0.35, 
-  FULL: 0.50,   
+  SMALL: 0.22,
+  MEDIUM: 0.35,
+  FULL: 0.50,
 };
+
+/* ------------------------------------------------------------------ */
+/*  SCROLL-LOCKED 40FPS IMAGE-SEQUENCE ANIMATION                       */
+/*                                                                      */
+/*  Behaviour:                                                          */
+/*   1. Section scrolls into view normally like any other section.      */
+/*   2. Once frame 0 is FULLY visible (top+bottom inside viewport),     */
+/*      the page "sticks" — further downward scroll input is captured   */
+/*      instead of moving the page.                                     */
+/*   3. The captured scroll intent triggers an autoplay of all 80        */
+/*      frames at a fixed 40fps (25ms/frame), independent of how much    */
+/*      the user actually scrolled — a single nudge plays it through.    */
+/*   4. Once the last frame is reached, the lock releases and normal     */
+/*      scrolling continues to the next section.                        */
+/* ------------------------------------------------------------------ */
+function ScrollImageSequence() {
+  const FRAME_COUNT = 80;
+  const FPS = 40;
+  const FRAME_DURATION = 1000 / FPS; // ~25ms per frame
+
+  const getFramePath = (i: number) =>
+    `/Morph_transition_spinning_animation_202608080745_${String(i).padStart(
+      3,
+      "0"
+    )}.jpg`;
+
+  const sectionRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imagesRef = useRef<HTMLImageElement[]>([]);
+
+  const currentFrameRef = useRef(0);
+  const isPlayingRef = useRef(false);
+  const isCompleteRef = useRef(false);
+  const isFullyVisibleRef = useRef(false);
+  const touchStartYRef = useRef(0);
+
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [showHint, setShowHint] = useState(false);
+  const [progressPct, setProgressPct] = useState(0);
+
+  /* ---------------- preload all 80 frames ---------------- */
+  useEffect(() => {
+    let loadedCount = 0;
+    const imgs: HTMLImageElement[] = [];
+
+    for (let i = 0; i < FRAME_COUNT; i++) {
+      const img = new window.Image();
+      img.src = getFramePath(i);
+      img.onload = () => {
+        loadedCount += 1;
+        setLoadProgress(Math.round((loadedCount / FRAME_COUNT) * 100));
+        if (loadedCount === FRAME_COUNT) setIsLoaded(true);
+      };
+      imgs.push(img);
+    }
+    imagesRef.current = imgs;
+  }, []);
+
+  /* ---------------- draw a given frame to canvas (cover fit) ---------------- */
+  const drawFrame = useCallback((index: number) => {
+    const canvas = canvasRef.current;
+    const img = imagesRef.current[index];
+    if (!canvas || !img || !img.complete || img.naturalWidth === 0) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    const targetW = Math.round(rect.width * dpr);
+    const targetH = Math.round(rect.height * dpr);
+
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    const canvasRatio = rect.width / rect.height;
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+
+    let drawWidth: number;
+    let drawHeight: number;
+    let offsetX: number;
+    let offsetY: number;
+
+    if (imgRatio > canvasRatio) {
+      drawHeight = rect.height;
+      drawWidth = drawHeight * imgRatio;
+      offsetX = (rect.width - drawWidth) / 2;
+      offsetY = 0;
+    } else {
+      drawWidth = rect.width;
+      drawHeight = drawWidth / imgRatio;
+      offsetX = 0;
+      offsetY = (rect.height - drawHeight) / 2;
+    }
+
+    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+  }, []);
+
+  /* ---------------- draw frame 0 once loaded, handle resize ---------------- */
+  useEffect(() => {
+    if (!isLoaded) return;
+    drawFrame(currentFrameRef.current);
+
+    const handleResize = () => drawFrame(currentFrameRef.current);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isLoaded, drawFrame]);
+
+  /* ---------------- IntersectionObserver: detect "fully appeared" ---------------- */
+  useEffect(() => {
+    const el = sectionRef.current;
+    if (!el) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        isFullyVisibleRef.current = entry.intersectionRatio >= 0.99;
+        if (isFullyVisibleRef.current && !isCompleteRef.current) {
+          setShowHint(true);
+        } else {
+          setShowHint(false);
+        }
+      },
+      { threshold: [0, 0.99, 1] }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  /* ---------------- 40fps rAF playback ---------------- */
+  const playSequence = useCallback(() => {
+    if (isPlayingRef.current || isCompleteRef.current || !isLoaded) return;
+    isPlayingRef.current = true;
+    setShowHint(false);
+
+    let lastTime: number | null = null;
+
+    const step = (timestamp: number) => {
+      if (lastTime === null) lastTime = timestamp;
+      const elapsed = timestamp - lastTime;
+
+      if (elapsed >= FRAME_DURATION) {
+        lastTime = timestamp;
+        const next = Math.min(currentFrameRef.current + 1, FRAME_COUNT - 1);
+        currentFrameRef.current = next;
+        drawFrame(next);
+        setProgressPct(Math.round((next / (FRAME_COUNT - 1)) * 100));
+      }
+
+      if (currentFrameRef.current >= FRAME_COUNT - 1) {
+        isPlayingRef.current = false;
+        isCompleteRef.current = true;
+        return;
+      }
+
+      requestAnimationFrame(step);
+    };
+
+    requestAnimationFrame(step);
+  }, [drawFrame, isLoaded]);
+
+  /* ---------------- scroll capture (wheel + touch) ---------------- */
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      if (!isFullyVisibleRef.current || isCompleteRef.current) return;
+      if (e.deltaY > 0) {
+        e.preventDefault();
+        playSequence();
+      }
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartYRef.current = e.touches[0].clientY;
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!isFullyVisibleRef.current || isCompleteRef.current) return;
+      const deltaY = touchStartYRef.current - e.touches[0].clientY;
+      if (deltaY > 0) {
+        e.preventDefault();
+        playSequence();
+      }
+    };
+
+    window.addEventListener("wheel", handleWheel, { passive: false });
+    window.addEventListener("touchstart", handleTouchStart, { passive: true });
+    window.addEventListener("touchmove", handleTouchMove, { passive: false });
+
+    return () => {
+      window.removeEventListener("wheel", handleWheel);
+      window.removeEventListener("touchstart", handleTouchStart);
+      window.removeEventListener("touchmove", handleTouchMove);
+    };
+  }, [playSequence]);
+
+  return (
+    <section
+      ref={sectionRef}
+      className="relative h-screen w-full overflow-hidden bg-slate-950"
+    >
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+
+      {/* subtle amber vignette to tie into the design system */}
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/30" />
+
+      {/* loading state while the 80 frames preload */}
+      {!isLoaded && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-slate-950">
+          <div className="h-10 w-10 animate-spin rounded-full border-2 border-amber-400/30 border-t-amber-400" />
+          <span className="text-sm font-medium tracking-wide text-amber-200/80">
+            {loadProgress}%
+          </span>
+        </div>
+      )}
+
+      {/* progress bar while animation plays / after it completes */}
+      {isLoaded && (
+        <div className="absolute bottom-0 left-0 right-0 z-20 h-1 bg-white/10">
+          <motion.div
+            className="h-full bg-amber-400"
+            animate={{ width: `${progressPct}%` }}
+            transition={{ duration: 0.05, ease: "linear" }}
+          />
+        </div>
+      )}
+
+      {/* scroll hint — only shown once frame 0 is fully in view and idle */}
+      {isLoaded && showHint && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: DURATION.MEDIUM, ease: emphasizedEasing }}
+          className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2 flex flex-col items-center gap-2 text-amber-200"
+        >
+          <span className="text-xs font-semibold uppercase tracking-widest">
+            Scroll
+          </span>
+          <ChevronDown className="h-5 w-5 animate-bounce" />
+        </motion.div>
+      )}
+    </section>
+  );
+}
 
 export default function Home() {
   const [isMuted, setIsMuted] = useState(true);
@@ -376,6 +625,9 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      {/* SCROLL-LOCKED 80-FRAME / 40FPS IMAGE SEQUENCE ANIMATION */}
+      <ScrollImageSequence />
     </div>
   );
 }
