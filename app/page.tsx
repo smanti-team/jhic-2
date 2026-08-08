@@ -64,7 +64,7 @@ function ScrollImageSequence() {
   const FRAME_DURATION = 1000 / FPS; // ~25ms per frame
 
   const getFramePath = (i: number) =>
-    `/Morph_transition_spinning_animation_202608080745_${String(i).padStart(
+    `/Text_morphs_into_woman_portrait_202608080814_${String(i).padStart(
       3,
       "0"
     )}.jpg`;
@@ -81,8 +81,6 @@ function ScrollImageSequence() {
 
   const [isLoaded, setIsLoaded] = useState(false);
   const [loadProgress, setLoadProgress] = useState(0);
-  const [showHint, setShowHint] = useState(false);
-  const [progressPct, setProgressPct] = useState(0);
 
   /* ---------------- preload all 80 frames ---------------- */
   useEffect(() => {
@@ -165,11 +163,6 @@ function ScrollImageSequence() {
     const observer = new IntersectionObserver(
       ([entry]) => {
         isFullyVisibleRef.current = entry.intersectionRatio >= 0.99;
-        if (isFullyVisibleRef.current && !isCompleteRef.current) {
-          setShowHint(true);
-        } else {
-          setShowHint(false);
-        }
       },
       { threshold: [0, 0.99, 1] }
     );
@@ -182,7 +175,6 @@ function ScrollImageSequence() {
   const playSequence = useCallback(() => {
     if (isPlayingRef.current || isCompleteRef.current || !isLoaded) return;
     isPlayingRef.current = true;
-    setShowHint(false);
 
     let lastTime: number | null = null;
 
@@ -195,7 +187,6 @@ function ScrollImageSequence() {
         const next = Math.min(currentFrameRef.current + 1, FRAME_COUNT - 1);
         currentFrameRef.current = next;
         drawFrame(next);
-        setProgressPct(Math.round((next / (FRAME_COUNT - 1)) * 100));
       }
 
       if (currentFrameRef.current >= FRAME_COUNT - 1) {
@@ -251,10 +242,7 @@ function ScrollImageSequence() {
     >
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
 
-      {/* subtle amber vignette to tie into the design system */}
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-black/30" />
-
-      {/* loading state while the 80 frames preload */}
+      {/* loading state while the 80 frames preload — removed once ready, nothing else overlays the video */}
       {!isLoaded && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 bg-slate-950">
           <div className="h-10 w-10 animate-spin rounded-full border-2 border-amber-400/30 border-t-amber-400" />
@@ -262,32 +250,6 @@ function ScrollImageSequence() {
             {loadProgress}%
           </span>
         </div>
-      )}
-
-      {/* progress bar while animation plays / after it completes */}
-      {isLoaded && (
-        <div className="absolute bottom-0 left-0 right-0 z-20 h-1 bg-white/10">
-          <motion.div
-            className="h-full bg-amber-400"
-            animate={{ width: `${progressPct}%` }}
-            transition={{ duration: 0.05, ease: "linear" }}
-          />
-        </div>
-      )}
-
-      {/* scroll hint — only shown once frame 0 is fully in view and idle */}
-      {isLoaded && showHint && (
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: DURATION.MEDIUM, ease: emphasizedEasing }}
-          className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2 flex flex-col items-center gap-2 text-amber-200"
-        >
-          <span className="text-xs font-semibold uppercase tracking-widest">
-            Scroll
-          </span>
-          <ChevronDown className="h-5 w-5 animate-bounce" />
-        </motion.div>
       )}
     </section>
   );
